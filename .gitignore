@@ -1,0 +1,14 @@
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Packaged plugin artefacts
+publish/
+
+# macOS
+.DS_Store
+
+# npm logs
+npm-debug.log*
