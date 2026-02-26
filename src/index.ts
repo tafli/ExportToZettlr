@@ -82,6 +82,13 @@ joplin.plugins.register({
 				: folder.title;
 		};
 
+		// Formats a timestamp (ms) as a 14-digit Zettlr-style ID: YYYYMMDDHHMMSS.
+		const toZettlrId = (ts: number): string => {
+			const d = new Date(ts);
+			const p = (n: number, len = 2) => String(n).padStart(len, '0');
+			return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+		};
+
 		// Returns the configured output path if set, otherwise falls back to
 		// the destination chosen in the Joplin export dialog.
 		const resolveDestPath = async (contextDestPath: string): Promise<string> => {
@@ -95,10 +102,12 @@ joplin.plugins.register({
 		let resourceMap: Record<string, string> = {};
 		// Maps folder ID → { sanitized title, parent_id } for recursive path resolution.
 		let folderRaw: Record<string, { title: string; parent_id: string }> = {};
+		// Tracks Zettlr IDs already used in the current export run (collision avoidance).
+		let usedIds = new Set<string>();
 		let pendingNotes: Array<{
 			parent_id: string;
-			id: string;
-			frontMatter: string;
+			title: string;
+			tags: string[];
 			body: string;
 			created_time: number;
 			updated_time: number;
@@ -114,6 +123,7 @@ joplin.plugins.register({
 				// Reset state at the start of each export run.
 				resourceMap = {};
 				folderRaw = {};
+				usedIds = new Set();
 				pendingNotes = [];
 			},
 
@@ -145,24 +155,6 @@ joplin.plugins.register({
 					page++;
 				}
 
-				// ── Build YAML front matter ───────────────────────────────────
-				const createdIso = new Date(item.created_time as number).toISOString();
-				const escapedTitle = (item.title as string)
-					.replace(/\\/g, '\\\\')
-					.replace(/"/g, '\\"');
-				const tagLines = tags.length > 0
-					? `tags:\n${tags.map(t => `  - ${t}`).join('\n')}`
-					: 'tags: []';
-
-				const frontMatter = [
-					'---',
-					`id: ${item.id}`,
-					`title: "${escapedTitle}"`,
-					`created: ${createdIso}`,
-					tagLines,
-					'---',
-				].join('\n');
-
 				// ── Ensure a top-level heading exists ────────────────────────
 				let body: string = (item.body as string) || '';
 				const hasH1 = /^#\s/m.test(body);
@@ -173,8 +165,8 @@ joplin.plugins.register({
 				// ── Defer writing until onClose (resources + full folder tree needed) ─
 				pendingNotes.push({
 					parent_id: (item.parent_id as string) || '',
-					id: item.id,
-					frontMatter,
+					title: item.title as string,
+					tags,
 					body,
 					created_time: item.created_time as number,
 					updated_time: item.updated_time as number,
@@ -205,9 +197,35 @@ joplin.plugins.register({
 					const resourcesRelPath = depth > 0
 						? `${'../'.repeat(depth)}resources`
 						: 'resources';
+					// ── Determine collision-safe Zettlr ID ───────────────────
+					let idTs = note.created_time;
+					let zId = toZettlrId(idTs);
+					while (usedIds.has(zId)) {
+						idTs += 1000; // +1 second
+						zId = toZettlrId(idTs);
+					}
+					usedIds.add(zId);
+
+					// ── Build YAML front matter with the resolved ID ──────────
+					const escapedTitle = note.title
+						.replace(/\\/g, '\\\\')
+						.replace(/"/g, '\\"');
+					const createdIso = new Date(note.created_time).toISOString();
+					const tagLines = note.tags.length > 0
+						? `tags:\n${note.tags.map(t => `  - ${t}`).join('\n')}`
+						: 'tags: []';
+					const frontMatter = [
+						'---',
+						`id: ${zId}`,
+						`title: "${escapedTitle}"`,
+						`created: ${createdIso}`,
+						tagLines,
+						'---',
+					].join('\n');
+
 					const body = convertLinks(note.body, resourceMap, resourcesRelPath);
-					const outFile = path.join(noteDestPath, `${note.id}.md`);
-					await fs.outputFile(outFile, `${note.frontMatter}\n\n${body}`);
+					const outFile = path.join(noteDestPath, `${zId}.md`);
+					await fs.outputFile(outFile, `${frontMatter}\n\n${body}`);
 					// Set file timestamps to match the note's creation and update dates.
 					await fs.utimes(outFile, new Date(note.created_time), new Date(note.updated_time));
 				}
