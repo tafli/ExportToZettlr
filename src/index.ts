@@ -100,6 +100,8 @@ joplin.plugins.register({
 			id: string;
 			frontMatter: string;
 			body: string;
+			created_time: number;
+			updated_time: number;
 		}> = [];
 
 		await joplin.interop.registerExportModule({
@@ -169,7 +171,14 @@ joplin.plugins.register({
 				}
 
 				// ── Defer writing until onClose (resources + full folder tree needed) ─
-				pendingNotes.push({ parent_id: (item.parent_id as string) || '', id: item.id, frontMatter, body });
+				pendingNotes.push({
+					parent_id: (item.parent_id as string) || '',
+					id: item.id,
+					frontMatter,
+					body,
+					created_time: item.created_time as number,
+					updated_time: item.updated_time as number,
+				});
 			},
 
 			onProcessResource: async (context: ExportContext, resource: any, filePath: string) => {
@@ -199,6 +208,8 @@ joplin.plugins.register({
 					const body = convertLinks(note.body, resourceMap, resourcesRelPath);
 					const outFile = path.join(noteDestPath, `${note.id}.md`);
 					await fs.outputFile(outFile, `${note.frontMatter}\n\n${body}`);
+					// Set file timestamps to match the note's creation and update dates.
+					await fs.utimes(outFile, new Date(note.created_time), new Date(note.updated_time));
 				}
 			},
 		});
